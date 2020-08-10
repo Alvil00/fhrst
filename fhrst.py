@@ -180,11 +180,11 @@ def export_to_mat_zone_bin_file(filename, mat_struct):
 # Функция которая возвращает из опредленного набора step-substep-n_last_iter только псоледние
 # сошедшиеся substeps c номером set'a
 def last_substep_generator(ls, p_steps):
-	k = 0
+	k = (0, 0, 0)
 	for n, i in enumerate(ls):
-		if i[1] <= k:
+		if i[1] <= k[1] or (i[0] > k[0] and n != 0):
 			yield n - 1, p_steps[n-1]
-		k = i[1]
+		k = i
 	yield n, p_steps[n]
 
 
@@ -283,8 +283,8 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 			previous_set = (0, 0, 0)
 			# Алгоритм вывода таблици set'ов
 			if len(ls_array)>1:
-				for current_set in ls_array:
-					if current_set[1]<=previous_set[1]:
+				for n_cs, current_set in enumerate(ls_array):
+					if current_set[1] <= previous_set[1] or (previous_set[0] < current_set[0] and n_cs != 0):
 						pulse = '├─>'
 					else:
 						pulse = '│  '
