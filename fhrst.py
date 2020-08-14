@@ -37,13 +37,13 @@ def parse_args():
 	
 	
 	exlcluded_items = fromrst_parser.add_mutually_exclusive_group()
-	exlcluded_items.add_argument('--nodefile', type=str, default=None, help='extract only nodes wich included in this file')
-	exlcluded_items.add_argument('--elemfile', type=str, default=None, help='extract only nodes wich has been owned by pointed elements wich has been contained in this file. WARNING: BE CAREFUL WITH THIS OPTION!')
+	exlcluded_items.add_argument('--nodefile', type=str, default=None, help='extract only nodes which included in this file')
+	exlcluded_items.add_argument('--elemfile', type=str, default=None, help='extract only nodes which has been owned by pointed elements which has been contained in this file. WARNING: BE CAREFUL WITH THIS OPTION!')
 	
 	fromrst_parser.add_argument('--sm', '--start_moment', default=1, type=int, help='start extraction moment - default set as one')
 	fromrst_parser.add_argument('--em', '--end_moment', default=0, type=int, help='end extraction moment - default set as zero so it means that script extract all moments till the last')
 	#fromrst_parser.add_argument('--et','--extract_type', choises=('stress', 'elastic_strains', 'plastic_strains', 'thermal_strains', 'creeep_strains'), type=str, default='stress', help='extract neseccey tensor from rst')
-	#fromrst_parser.add_argument('--mt','--mat_table', default=None, type=str, help='average results on material borders by group of materials wich contained in pointed file')
+	#fromrst_parser.add_argument('--mt','--mat_table', default=None, type=str, help='average results on material borders by group of materials which contained in pointed file')
 	
 	fromrst_parser.add_argument('--rstfile', help='name of rst file', metavar='file', required=True)
 	fromrst_parser.add_argument('--hcnfile', help='name of hcn file', metavar='file', required=True)
@@ -52,11 +52,14 @@ def parse_args():
 	# Parser from archive file
 	fromhcn_parser = subparsers.add_parser('from-hcn',help='extract stress tensor from hcn binary files to tmp text files')
 	
-	fromhcn_parser.add_argument('-z', '-zero', action='store_true', help='append zero item to each tmp file head')
-	fromhcn_parser.add_argument('-i', '-list', action='store_true', help='create file with list of extracted nodes in each material folder')
-	fromhcn_parser.add_argument('-r', '-regtimefile', action='store_true', help='add file wich contain sequence of time moments in each regime')
+	zero = fromhcn_parser.add_mutually_exclusive_group()
+	zero.add_argument('-z', '-zero', action='store_true', help='append zero item to each tmp file head')
+	zero.add_argument('-t', '-tail', action='store_true', help='append zero item to each tmp file tail')
 	
-	fromhcn_parser.add_argument('--nodefile', type=str, help = "file wich containing neseccery nodes")
+	fromhcn_parser.add_argument('-i', '-list', action='store_true', help='create file with list of extracted nodes in each material folder')
+	fromhcn_parser.add_argument('-r', '-regtimefile', action='store_true', help='add file which contain sequence of time moments in each regime')
+	
+	fromhcn_parser.add_argument('--nodefile', type=str, help = "file which containing neseccery nodes")
 	fromhcn_parser.add_argument('--outdir', type=str, help='dir with final tmp files')
 	
 	
@@ -486,7 +489,7 @@ def create_regtime_file(file, sequences):
 # zeros - флаг который регулирует добавление нулевого момента времени к файлу tmp
 # listfile - флаг который создает в каждой папке материалов файл NODE.TXT со списком узлов в данной папке
 # regtime - флаг регулирующий содание файла реимов (файл n.his в папке запуска скрипта)
-def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False, zeros=False, listfile=False, regtime=False):
+def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False, zeros=False, tail=False, listfile=False, regtime=False):
 	global log
 	# Словарь из элемнтов:ключ - номер материала, значение - множество узлов в этом материале
 	mat_node_set = {}
@@ -546,6 +549,8 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 								temp = SIX_TEMPLATE
 						# Записываем строку с тензором
 						of.write(temp.format(a=i, num=n, rname=regime_name))
+					if file == filelist[-1] and tail:
+						of.write(FOUR_TEMPLATE.format(a = (20.0, 0.0, 0.0, 0.0, 0.0), num=n + 1, rname="NULL"))
 					of.close()
 		if regtime:
 			regtimelist.append(range(curnum, n + 1))
@@ -581,12 +586,12 @@ def main():
 			excluded = extract_nodes(args.elemfile)
 			excluded_type = ExcludedType.ELEMENT
 			if log:
-				log.info('extract nodes wich owned by elements wich lie in {} file'.foramt(args.elemfile))
+				log.info('extract nodes which owned by elements which lie in {} file'.foramt(args.elemfile))
 		elif args.nodefile is not None:
 			excluded = extract_nodes(args.nodefile)
 			excluded_type = ExcludedType.NODE
 			if log:
-				log.info('extract nodes wich contain in {} file'.foramt(args.nodefile))
+				log.info('extract nodes which contain in {} file'.foramt(args.nodefile))
 		else:
 			excluded = None
 			if log:
@@ -597,9 +602,10 @@ def main():
 			log.info('nodes on border between materials will be averaged by value')
 		extract_tensor_from_rst(args.rstfile, args.hcnfile, base, excluded, excluded_type, args.a, args.v, args.sm, args.em)
 	elif args.extractor=='from-hcn':
-		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.i, args.r)
+		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.t, args.i, args.r)
 	else:
 		print('print -h or --help key to show help message.')
+	
 	
 if __name__=="__main__":
 	main()
