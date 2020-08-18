@@ -590,6 +590,136 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 		create_regtime_file('n.his', regtimelist)
 
 
+
+def get_damage_rst(rstfile, damagefile=None, new_rstfilename=None):
+	with open(rstfile, 'rb', buffering=0) as f:
+		d = f.read(412)
+		info_header = list(struct.unpack('103i', d))
+		print('info_header:')
+		print(list(enumerate(info_header,0)))
+		d = f.read(332)
+		rst_header = list(struct.unpack(('83i'), d))
+		print('rst_header')
+		print(list(enumerate(rst_header,-1)))
+		num_of_dof = rst_header[6]
+		
+		d = f.read(num_of_dof * 4 + 12)
+		dof_header = list(struct.unpack(('{}i'.format(num_of_dof + 3)), d))
+		
+		nnod = rst_header[4]
+		d = f.read(nnod * 4 + 12)
+		nod_table = list(struct.unpack(('{}i'.format(nnod + 3)), d))
+		#print('NNOD')
+		#print(nod_table)
+		
+
+			
+
+		nelm = rst_header[8]
+		d = f.read(nelm * 4 + 12)
+		elm_table = list(struct.unpack(('{}i'.format(nelm + 3)), d))
+		# print('ELM')
+		# print(elm_table)
+		
+		glbnnod = rst_header[50]
+		glbnod_ptr = rst_header[51]
+		gnod_table = None
+		if glbnnod != nnod and glbnod_ptr == 0:
+			d = f.read(glbnnod * 4 + 12)
+			gnod_table = list(struct.unpack(('{}i'.format(glbnnod + 3)), d))
+			# print('GLBNOD')
+			# print(gnod_table)
+		
+		resmax = rst_header[5]
+		d = f.read(2 * resmax * 4 + 12)
+		smp_dsi_table = list(struct.unpack(('{}i'.format(2 * resmax + 3)), d))
+		nsets = rst_header[10]
+		start_point = smp_dsi_table[2]
+		
+			
+		d = f.read(2 * resmax * 4 + 12)
+		tim_table = list(struct.unpack(('ii{}di'.format(resmax)), d))
+		
+		d = f.read(3 * resmax * 4 + 12)
+		lsp_table = list(struct.unpack(('{}i'.format(3 * resmax + 3)), d))
+		#print(lsp_table)
+		
+		# START CHANGING
+		if nsets == 1:
+			pass
+		else:
+			end_point = smp_dsi_table[3]
+		
+		
+		# CHANGE DSI TABLE
+		for i in range(3,len(smp_dsi_table)+1):
+			if smp_dsi_table[i] == 0:
+				break
+			smp_dsi_table[i] = 0
+			
+		
+		# CHANGE NSETS
+		rst_header[10] = 1
+		
+		# CHANGE TIME TABLE
+		for i in range(3,len(tim_table)+1):
+			if tim_table[i] == 0.0:
+				break
+			tim_table[i] = 0.0
+			
+		# TIMETABLE CONVERTATION
+		tim_table = struct.unpack("{}i".format(resmax * 2 + 3), struct.pack('ii{}di'.format(resmax), *tim_table))
+		
+		# CHANGE LSP TABLE
+		for i in range(5,len(lsp_table)+1):
+			if lsp_table[i] == 0:
+				break
+			lsp_table[i] = 0
+		
+		# CHANGE INFO HEADER
+		info_header[28] = end_point
+		info_header[98] = end_point
+		
+		d = f.read(end_point * 4 - f.tell())
+		
+		result = b""
+		for item in (info_header, rst_header, dof_header, nod_table, elm_table, gnod_table, smp_dsi_table, tim_table, lsp_table):
+			if item is not None:
+				result +=  struct.pack('{}i'.format(len(item)), *item)
+		result += d
+		# cyc_ptr = rst_header[18]
+		# if cyc_ptr:
+			# d = f.read(resmax * 4 + 12)
+			# cyc = list(struct.unpack(('{}i'.format(resmax + 3)), d))
+		
+		
+		# ntran = rst_header[30]
+		# if ntran:
+			# d = f.read(ntran * 8 * 25 + 12)
+			# tran = list(struct.unpack(('ii{}di'.format(ntran * 25)), d))
+		
+		# d = f.read(332)
+		# geo_header = list(struct.unpack(('{}i'.format(83)), d))
+		# # print("GEO HEADER")
+		# # print(geo_header)
+		
+		# maxety = geo_header[3]
+		# d = f.read(maxety * 4 + 12)
+		# ety = list(struct.unpack(('ii{}ii'.format(maxety)), d))
+		# # print(ety)
+		
+		# ety_siz = geo_header[20]
+		# ety_table = []
+		# for i in range(maxety):
+			# d = f.read(8)
+			# ety_table.append(list(struct.unpack(('ii'), d)))
+			# d = f.read(4 * ety_table[-1][0] + 4)
+			# ety_table[-1] += list(struct.unpack(('{}i'.format(ety_table[-1][0]+1)), d))
+		# print(ety_table)
+	with open(new_rstfilename, 'wb', buffering=0) as f:
+		f.write(result)
+	
+
 def main():
 	global log
 	args = parse_args()
@@ -632,3 +762,4 @@ def main():
 	
 if __name__=="__main__":
 	main()
+	#get_damage_rst("file.rst", new_rstfilename= "nrst.rst")
