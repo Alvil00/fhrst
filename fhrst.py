@@ -559,8 +559,8 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 	if listfile:
 		for mat in mat_node_set.keys():
 			if len(mat_node_set[mat]):
-				with open("{o}{sep}MATERIAL_{m}{sep}ZONA1.TXT".format(m=mat, sep=os.path.sep, o=outdir), mode='w') as zf:
-					zf.write("%i\n" % len(mat_node_set[mat]))
+				with open("{o}{sep}MATERIAL_{m}{sep}ZONA1.txt".format(m=mat, sep=os.path.sep, o=outdir), mode='w') as zf:
+					zf.write("%i//\n" % len(mat_node_set[mat]))
 					for i in sorted(mat_node_set[mat]):
 						zf.write("%i\n" % i)
 	if regtime:
