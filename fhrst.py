@@ -590,136 +590,216 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 		create_regtime_file('n.his', regtimelist)
 
 
+class RTable:
+	TYP = {
+	'i': 1,
+	'q': 2,
+	'd': 2,
+	'f': 1
+	}
+	
+	def __init__(self, file, name=None, size=None, typ=None):
+		self.curpos = file.tell()
+		if name is not None:
+			self._name = name
+		else:
+			self._name = ''
+		
+		if typ is None:
+			self._type = 'i'
+		else:
+			self._type = typ
 
-def get_damage_rst(rstfile, damagefile=None, new_rstfilename=None):
+		self._head = file.read(8)
+		if size is None:
+			size = struct.unpack('2i', self._head)[0]
+		self._body = list(struct.unpack('{c}{t}'.format(c=int(size // RTable.TYP[self._type]), t=self._type), file.read(size * 4)))
+		self._tail = file.read(4)
+		if size != struct.unpack('i',self._tail)[0]:
+			file.seek(self.curpos, 1)
+			raise IndexError("{}-{}".format(size, struct.unpack('i', self._tail)[0]))
+	
+	@property
+	def name(self):
+		return self._name
+	
+	def __getitem__(self, item):
+		return self._body[item]
+	
+	def __setitem__(self, item, value):
+		self._body[item] = value
+	
+	def __iter__(self):
+		return iter(self._body)
+	
+	def __len__(self):
+		return len(self._body)
+	
+	def __bytes__(self):
+		return self._head + struct.pack('{c}{t}'.format(c=len(self), t=self._type), *self._body) + self._tail
+
+	def __str__(self):
+		return str(list(enumerate(self._body)))[1:-1]
+		
+	def __repr__(self):
+		return self._name + ":{}".format(str(self))
+
+def get_damage_rst_class(rstfile, damagefile=None, new_rstfilename=None):
+	result = b""
 	with open(rstfile, 'rb', buffering=0) as f:
-		d = f.read(412)
-		info_header = list(struct.unpack('103i', d))
-		print('info_header:')
-		print(list(enumerate(info_header,0)))
-		d = f.read(332)
-		rst_header = list(struct.unpack(('83i'), d))
-		print('rst_header')
-		print(list(enumerate(rst_header,-1)))
-		num_of_dof = rst_header[6]
+		info_header = RTable(f)
+		rst_header = RTable(f)
+		dof_header = RTable(f)
+		node_table = RTable(f)
+		elm_table = RTable(f)
 		
-		d = f.read(num_of_dof * 4 + 12)
-		dof_header = list(struct.unpack(('{}i'.format(num_of_dof + 3)), d))
-		
-		nnod = rst_header[4]
-		d = f.read(nnod * 4 + 12)
-		nod_table = list(struct.unpack(('{}i'.format(nnod + 3)), d))
-		#print('NNOD')
-		#print(nod_table)
-		
-
-			
-
-		nelm = rst_header[8]
-		d = f.read(nelm * 4 + 12)
-		elm_table = list(struct.unpack(('{}i'.format(nelm + 3)), d))
-		# print('ELM')
-		# print(elm_table)
-		
-		glbnnod = rst_header[50]
-		glbnod_ptr = rst_header[51]
+		glbnnod = rst_header[48]
+		glbnod_ptr = rst_header[49]
 		gnod_table = None
-		if glbnnod != nnod and glbnod_ptr == 0:
-			d = f.read(glbnnod * 4 + 12)
-			gnod_table = list(struct.unpack(('{}i'.format(glbnnod + 3)), d))
-			# print('GLBNOD')
-			# print(gnod_table)
+		if glbnnod != len(node_table) and glbnod_ptr == 0:
+			gnod_table = RTable(f)
 		
-		resmax = rst_header[5]
-		d = f.read(2 * resmax * 4 + 12)
-		smp_dsi_table = list(struct.unpack(('{}i'.format(2 * resmax + 3)), d))
-		nsets = rst_header[10]
-		start_point = smp_dsi_table[2]
-		
-			
-		d = f.read(2 * resmax * 4 + 12)
-		tim_table = list(struct.unpack(('ii{}di'.format(resmax)), d))
-		
-		d = f.read(3 * resmax * 4 + 12)
-		lsp_table = list(struct.unpack(('{}i'.format(3 * resmax + 3)), d))
-		#print(lsp_table)
-		
-		# START CHANGING
+		dsi_table = RTable(f)
+		nsets = rst_header[8]
+		start_point = dsi_table[0]
 		if nsets == 1:
 			pass
 		else:
-			end_point = smp_dsi_table[3]
+			end_point = dsi_table[1]
 		
+		#print(dsi_table)
+		time_table = RTable(f, typ='d')
+		lsp_table = RTable(f)
+		
+		cyc_ptr = rst_header[16]
+		cyc_table = None
+		if cyc_ptr:
+			cyc_table = RTable(f)
+		
+		ntran = rst_header[28]
+		ntran_table = None
+		if ntran:
+			ntran_table = RTable(f)
+		
+		geo_header = RTable(f)
+		ety_header = RTable(f)
+		
+		ety_tables = []
+		for i in ety_header:
+			ety_tables.append(RTable(f))
+		
+		
+		rl_header = RTable(f)
+		rl_tables = []
+		for i in rl_header:
+			if i!=0:
+				rl_tables.append(RTable(f, typ='d'))
+		
+		maxcsy = geo_header[5]
+		csy_header = None
+		csy_tables = []
+		if maxcsy:
+			csy_header = RTable(f)
+			for i in csy_header:
+				csy_tables.append(RTable(f, typ='d'))
+		
+		loc_tables = []
+		for i in node_table:
+			loc_tables.append(RTable(f, typ='d'))
+		
+		eid_table = RTable(f, typ='q')
+		
+		element_tables = []
+		for i in eid_table:
+			element_tables.append(RTable(f))
+		
+		another_info = f.read(start_point * 4 - f.tell())
+		
+		solution_header = RTable(f)
+		solu_unused_info = []
+		
+
+		
+		ptr_esl = solution_header[118] + solution_header[119]
+		solu_unused_info.append(f.read((ptr_esl - len(solution_header) - 3) * 4))
+		
+		esl_table = RTable(f, typ='q')
+
+
+		solu_unused_info.append(f.read((esl_table[0] - len(esl_table) * 2) * 4 - 12))
+		elemresults = []
+		for elem in esl_table:
+			if elem != 0:
+				elemresult = RTable(f)
+				elemresults.append(elemresult)
+				for inum ,item in enumerate(elemresult):
+					if item > 0:
+						ei = RTable(f, typ='f')
+						if (ei.curpos - elemresult.curpos) // 4 == elemresult[2]:
+							for i in range(len(ei)):
+								ei[i] = 97.706 if i % 6 == 0 else 0.0
+						elemresults.append(ei)
+
+
+		
+		if f.tell() != end_point * 4: 
+			raise ValueError("{}-{}".format(f.tell(), end_point * 4))
 		
 		# CHANGE DSI TABLE
-		for i in range(3,len(smp_dsi_table)+1):
-			if smp_dsi_table[i] == 0:
+		for i in range(1, len(dsi_table) + 1):
+			if dsi_table[i] == 0:
 				break
-			smp_dsi_table[i] = 0
+			dsi_table[i] = 0
 			
 		
 		# CHANGE NSETS
-		rst_header[10] = 1
+		rst_header[8] = 1
 		
 		# CHANGE TIME TABLE
-		for i in range(3,len(tim_table)+1):
-			if tim_table[i] == 0.0:
+		for i in range(1, len(time_table) + 1):
+			if time_table[i] == 0.0:
 				break
-			tim_table[i] = 0.0
+			time_table[i] = 0.0
 			
-		# TIMETABLE CONVERTATION
-		tim_table = struct.unpack("{}i".format(resmax * 2 + 3), struct.pack('ii{}di'.format(resmax), *tim_table))
 		
 		# CHANGE LSP TABLE
-		for i in range(5,len(lsp_table)+1):
+		for i in range(3,len(lsp_table) + 1):
 			if lsp_table[i] == 0:
 				break
 			lsp_table[i] = 0
 		
 		# CHANGE INFO HEADER
-		info_header[28] = end_point
-		info_header[98] = end_point
+		info_header[26] = end_point
+		info_header[96] = end_point
 		
-		d = f.read(end_point * 4 - f.tell())
-		
-		result = b""
-		for item in (info_header, rst_header, dof_header, nod_table, elm_table, gnod_table, smp_dsi_table, tim_table, lsp_table):
-			if item is not None:
-				result +=  struct.pack('{}i'.format(len(item)), *item)
-		result += d
-		# cyc_ptr = rst_header[18]
-		# if cyc_ptr:
-			# d = f.read(resmax * 4 + 12)
-			# cyc = list(struct.unpack(('{}i'.format(resmax + 3)), d))
-		
-		
-		# ntran = rst_header[30]
-		# if ntran:
-			# d = f.read(ntran * 8 * 25 + 12)
-			# tran = list(struct.unpack(('ii{}di'.format(ntran * 25)), d))
-		
-		# d = f.read(332)
-		# geo_header = list(struct.unpack(('{}i'.format(83)), d))
-		# # print("GEO HEADER")
-		# # print(geo_header)
-		
-		# maxety = geo_header[3]
-		# d = f.read(maxety * 4 + 12)
-		# ety = list(struct.unpack(('ii{}ii'.format(maxety)), d))
-		# # print(ety)
-		
-		# ety_siz = geo_header[20]
-		# ety_table = []
-		# for i in range(maxety):
-			# d = f.read(8)
-			# ety_table.append(list(struct.unpack(('ii'), d)))
-			# d = f.read(4 * ety_table[-1][0] + 4)
-			# ety_table[-1] += list(struct.unpack(('{}i'.format(ety_table[-1][0]+1)), d))
-		# print(ety_table)
-	with open(new_rstfilename, 'wb', buffering=0) as f:
-		f.write(result)
-	
 
+						
+
+		result_sequence = (info_header, rst_header, dof_header, node_table, elm_table, gnod_table,
+						dsi_table, time_table, lsp_table, cyc_table, ntran_table,
+						geo_header, ety_header, *ety_tables, rl_header, *rl_tables,
+						csy_header, *csy_tables, *loc_tables, eid_table, *element_tables,
+						another_info, solution_header, solu_unused_info[0], esl_table,
+						solu_unused_info[1])
+		
+		
+		with open(new_rstfilename, 'wb', buffering=0) as f:
+
+						
+			for item in result_sequence[:]:
+				if item is None:
+					continue
+				elif isinstance(item, RTable):
+					f.write(bytes(item))
+				elif isinstance(item, bytes):
+					f.write(item)
+			
+			for num, i in enumerate(elemresults):
+				f.write(bytes(i))
+				if num % 100 == 0:
+					print('{}/{}\t\t'.format(num, len(elemresults)), end='\r')
+			print('{a}/{a}\t\t'.format(a=len(elemresults)))
+			
 def main():
 	global log
 	args = parse_args()
@@ -761,5 +841,5 @@ def main():
 	
 	
 if __name__=="__main__":
-	main()
-	#get_damage_rst("file.rst", new_rstfilename= "nrst.rst")
+	#main()
+	get_damage_rst_class("file.rst", new_rstfilename= "nrst.rst")
