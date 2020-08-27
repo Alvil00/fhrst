@@ -9,6 +9,15 @@ import os
 import os.path
 import collections.abc
 
+try:
+	import unite
+	GLOBAL_UNITE_LACK_MESSAGE = ''
+except ImportError:
+	unite = None
+	GLOBAL_UNITE_LACK_MESSAGE = '!WARNING! This routine is not available because python cant find out unite module'
+	
+
+
 __author__ = 'Vilenskiy Alexey dep. 50'
 log = None
 
@@ -25,10 +34,10 @@ def parse_args():
 	main_parser.add_argument('-l','-log', action='store_true', help='save some log information')
 	main_parser.add_argument('-v','-verbose', action='store_true', help='verbose mode')
 	
-	subparsers = main_parser.add_subparsers(help='sub-commands help', title='subcommands', description='extractors of stress tensor', dest='extractor')
+	subparsers = main_parser.add_subparsers(help='sub-commands help', title='subcommands', description='extractors of stress tensor and another useful features', dest='extractor')
+	
 	# Parser from rst file
 	fromrst_parser = subparsers.add_parser('from-rst', help='extract stress tensor from rst to hcn binary file')
-	
 	
 	fromrst_parser.add_argument('-f', '-forced', action='store_true', help='forced save each 6 component from stress tensor\
 	if that has been disabled like in default case, programm save only 4 component of stress if it has not found any stereo element')
@@ -65,6 +74,22 @@ def parse_args():
 	
 	fromhcn_parser.add_argument('hcnfiles', type=str, nargs='+', help='binary hcn archive file')
 	
+	# Loader to rst file
+	if unite:
+		torst_help_message = 'load accumulated damage into rst file into sx item of nodes results'
+	else:
+		torst_help_message = GLOBAL_UNITE_LACK_MESSAGE
+		
+	torst_loader = subparsers.add_parser('to-rst', help=torst_help_message)
+	
+	torst_loader.add_argument('--rstfile', type=str, help='name of rst file with neseccery geometry', metavar='file', required=True)
+	torst_loader.add_argument('--damfile', type=str, help='name of new accumulated damage file', metavar='file', required=True)
+	
+	torst_loader.add_argument('--mdf', '--mat_damage_file', action='append', dest='mdf', nargs=2,
+								help='append material damage macro file. ness 2 args - {num of material} {name of file}',
+								metavar=("material_num", "damage_file"), required=True)
+	
+	#torst_loader.add_argument('-a', '-averaged', action='store_true', help='if this flag is active chose material with try to apply damage from material number 0')
 	r = main_parser.parse_args()
 	return r
 
@@ -643,35 +668,13 @@ class RTable:
 	def __repr__(self):
 		return self._name + ":{}".format(str(self))
 
-def read_nodes_from_visualse_macro(filename = None,vistype=None,com_str = 4, s = False):
-	if filename is None:
-		filename = 'VIS.mac'
-	if vistype == None:
-		vistype = "DOF"
-	node_dict = {}
-	with open(filename,'r') as f:
-		for num,i in enumerate(f):
-			if num>=com_str:
-				if i == "/go" or not i.strip():
-					break
-				node = i.split(",")
-				if vistype=="DOF":
-					node_dict[int(node[1])]=float(node[4])
-				elif vistype=="BF":
-					node_dict[int(node[1])]=float(node[3])
-				else:
-					if not s:
-						print("unknown format")
-					raise Error
-	return node_dict
-
-def get_damage_rst_class(rstfile, damagefiles=None, new_rstfilename=None):
+def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 	global TABLE_OF_ETYPES
 	
 	enod_table = {} # table of elements
 	mat_node_table = {} #table of materials with nodes
 	
-	with open(rstfile, 'rb', buffering=0) as f:
+	with open(rstfilename, 'rb', buffering=0) as f:
 		info_header = RTable(f)
 		rst_header = RTable(f)
 		dof_header = RTable(f)
@@ -711,12 +714,15 @@ def get_damage_rst_class(rstfile, damagefiles=None, new_rstfilename=None):
 		
 		# Material configurations
 		matnum = geo_header[13]
-		for i in range(matnum):
+		for i in range(1, matnum + 1):
 			mat_node_table[i] = MatZone(i)
-		
-		# Read damage files
-		for num, i in damagefiles.items():
-			mat_node_table[num].nlist = read_nodes_from_visualse_macro(i)
+			mat_node_table[i].nlist = {}
+		# Read damage dict
+		for num, item in damaged_dict.items():
+			try:
+				mat_node_table[num].nlist = item
+			except KeyError:
+				print('Material number {} hasnt met at the rst file'.format(num))
 		
 		ety_tables = []
 		for i in ety_header:
@@ -795,6 +801,8 @@ def get_damage_rst_class(rstfile, damagefiles=None, new_rstfilename=None):
 								ei[i] = mat_node_table[curmat].nlist.get(node, 0.0)
 							except KeyError:
 								ei[i] = 0.0
+							except AttributeError:
+								raise
 							ei[i + 1] = 0.0
 							ei[i + 2] = 0.0
 							ei[i + 3] = 0.0
@@ -858,9 +866,10 @@ def get_damage_rst_class(rstfile, damagefiles=None, new_rstfilename=None):
 			
 			for num, i in enumerate(elemresults):
 				f.write(bytes(i))
-				if num % 100 == 0:
-					print('{}/{}\t\t'.format(num, len(elemresults)), end='\r')
-			print('{a}/{a}\t\t'.format(a=len(elemresults)))
+				if verbose:
+					if num % (len(elemresults) // 1000) == 0:
+						print('Write results {}/{}\t\t'.format(num, len(elemresults)), end='\r')
+					print('{a}/{a}\t\t'.format(a=len(elemresults)))
 			
 def main():
 	global log
@@ -898,10 +907,23 @@ def main():
 		extract_tensor_from_rst(args.rstfile, args.hcnfile, base, excluded, excluded_type, args.a, args.v, args.sm, args.em)
 	elif args.extractor=='from-hcn':
 		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.t, args.i, args.r, args.c)
+	elif args.extractor == 'to-rst':
+		if unite:
+			mdf = {}
+			mnd = {}
+			for material_num, dam_file in args.mdf:
+				if mdf.get(material_num):
+					mdf[material_num].append(dam_file)
+				else:
+					mdf[material_num] = [dam_file,]
+			for mat, dam_files in mdf.items():
+				mnd[int(mat)] = unite.main(['-icf', '-jrd', '-s', '--com', '2', *dam_files])
+			get_damage_rst(args.rstfile, args.damfile, mnd, args.v)
+		else:
+			print(GLOBAL_UNITE_LACK_MESSAGE)
 	else:
 		print('print -h or --help key to show help message.')
 	
 	
 if __name__=="__main__":
 	main()
-	#get_damage_rst_class("GI.rst",{i:"m{}.mac".format(i) for i in range(1,8) if i!=6},new_rstfilename= "nrst.rst")
