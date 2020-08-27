@@ -105,7 +105,7 @@ class Element:
 		if TABLE_OF_ETYPES.get(self.etype)[0] in SOLID_ELEMENTS_2D:
 			if self.nlist[3]==self.nlist[2]:
 				self.nlist.pop()
-		elif TABLE_OF_ETYPES.get(self.etype)[0]!=187:
+		elif TABLE_OF_ETYPES.get(self.etype)[0]!=187 and TABLE_OF_ETYPES.get(self.etype)[0] in SOLID_ELEMENTS:
 			if self.nlist[2]==self.nlist[3] and self.nlist[4]==self.nlist[5]: #Thetra optinon
 				self.nlist = self.nlist[:2]
 				self.nlist.append(self.nlist[4])
@@ -589,7 +589,6 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 	if regtime:
 		create_regtime_file('n.his', regtimelist)
 
-
 class RTable:
 	TYP = {
 	'i': 1,
@@ -644,8 +643,34 @@ class RTable:
 	def __repr__(self):
 		return self._name + ":{}".format(str(self))
 
-def get_damage_rst_class(rstfile, damagefile=None, new_rstfilename=None):
-	result = b""
+def read_nodes_from_visualse_macro(filename = None,vistype=None,com_str = 4, s = False):
+	if filename is None:
+		filename = 'VIS.mac'
+	if vistype == None:
+		vistype = "DOF"
+	node_dict = {}
+	with open(filename,'r') as f:
+		for num,i in enumerate(f):
+			if num>=com_str:
+				if i == "/go" or not i.strip():
+					break
+				node = i.split(",")
+				if vistype=="DOF":
+					node_dict[int(node[1])]=float(node[4])
+				elif vistype=="BF":
+					node_dict[int(node[1])]=float(node[3])
+				else:
+					if not s:
+						print("unknown format")
+					raise Error
+	return node_dict
+
+def get_damage_rst_class(rstfile, damagefiles=None, new_rstfilename=None):
+	global TABLE_OF_ETYPES
+	
+	enod_table = {} # table of elements
+	mat_node_table = {} #table of materials with nodes
+	
 	with open(rstfile, 'rb', buffering=0) as f:
 		info_header = RTable(f)
 		rst_header = RTable(f)
@@ -684,10 +709,21 @@ def get_damage_rst_class(rstfile, damagefile=None, new_rstfilename=None):
 		geo_header = RTable(f)
 		ety_header = RTable(f)
 		
+		# Material configurations
+		matnum = geo_header[13]
+		for i in range(matnum):
+			mat_node_table[i] = MatZone(i)
+		
+		# Read damage files
+		for num, i in damagefiles.items():
+			mat_node_table[num].nlist = read_nodes_from_visualse_macro(i)
+		
 		ety_tables = []
 		for i in ety_header:
-			ety_tables.append(RTable(f))
-		
+			last_ety = RTable(f)
+			ety_tables.append(last_ety)
+			TABLE_OF_ETYPES[last_ety[0]] = (last_ety[1], last_ety[93])
+		del last_ety
 		
 		rl_header = RTable(f)
 		rl_tables = []
@@ -709,15 +745,24 @@ def get_damage_rst_class(rstfile, damagefile=None, new_rstfilename=None):
 		
 		eid_table = RTable(f, typ='q')
 		
+		# Configure elements
 		element_tables = []
-		for i in eid_table:
-			element_tables.append(RTable(f))
-		
+		for enum, i in zip(elm_table, eid_table):
+			last_element = RTable(f)
+			element_tables.append(last_element)
+			try:
+				_e = Element(enum, last_element[0], last_element[1], last_element[10:(10 + TABLE_OF_ETYPES[last_element[1]][1])])
+			except IndexError:
+				print(last_element)
+			if _e is not None:
+				enod_table[enum] = _e
+		del _e
+		del last_element
+			
 		another_info = f.read(start_point * 4 - f.tell())
 		
 		solution_header = RTable(f)
 		solu_unused_info = []
-		
 
 		
 		ptr_esl = solution_header[118] + solution_header[119]
@@ -725,24 +770,42 @@ def get_damage_rst_class(rstfile, damagefile=None, new_rstfilename=None):
 		
 		esl_table = RTable(f, typ='q')
 
-
-		solu_unused_info.append(f.read((esl_table[0] - len(esl_table) * 2) * 4 - 12))
 		elemresults = []
-		for elem in esl_table:
-			if elem != 0:
-				elemresult = RTable(f)
-				elemresults.append(elemresult)
-				for inum ,item in enumerate(elemresult):
-					if item > 0:
-						ei = RTable(f, typ='f')
-						if (ei.curpos - elemresult.curpos) // 4 == elemresult[2]:
-							for i in range(len(ei)):
-								ei[i] = 97.706 if i % 6 == 0 else 0.0
-						elemresults.append(ei)
+		#filter(lambda a: a[1]==0, list(zip(elm_table ,esl_table)).sort(key=lambda a:a[1]))
+		elems_walk = list(filter(lambda a: a[1]!=0, zip(elm_table ,esl_table)))
+		elems_walk.sort(key=lambda a:a[1])
+
+		for enum, elem in elems_walk:
+			if elem == 0:
+				continue
+			try:
+				curmat = enod_table[enum].mat
+				nlist = enod_table[enum].nlist
+			except KeyError:
+				curmat = -100
+				nlist = []
+			elemresult = RTable(f)
+			elemresults.append(elemresult)
+			for inum ,item in enumerate(elemresult):
+				if item > 0:
+					ei = RTable(f, typ='f')
+					if (ei.curpos - elemresult.curpos) // 4 == elemresult[2] and curmat != -100:
+						for node, i in zip(nlist, range(0, len(ei), 6)):
+							try:
+								ei[i] = mat_node_table[curmat].nlist.get(node, 0.0)
+							except KeyError:
+								ei[i] = 0.0
+							ei[i + 1] = 0.0
+							ei[i + 2] = 0.0
+							ei[i + 3] = 0.0
+							ei[i + 4] = 0.0
+							ei[i + 5] = 0.0
+					elemresults.append(ei)
 
 
 		
 		if f.tell() != end_point * 4: 
+			print(elemresults[-20:])
 			raise ValueError("{}-{}".format(f.tell(), end_point * 4))
 		
 		# CHANGE DSI TABLE
@@ -779,8 +842,7 @@ def get_damage_rst_class(rstfile, damagefile=None, new_rstfilename=None):
 						dsi_table, time_table, lsp_table, cyc_table, ntran_table,
 						geo_header, ety_header, *ety_tables, rl_header, *rl_tables,
 						csy_header, *csy_tables, *loc_tables, eid_table, *element_tables,
-						another_info, solution_header, solu_unused_info[0], esl_table,
-						solu_unused_info[1])
+						another_info, solution_header, solu_unused_info[0], esl_table)
 		
 		
 		with open(new_rstfilename, 'wb', buffering=0) as f:
@@ -841,5 +903,5 @@ def main():
 	
 	
 if __name__=="__main__":
-	#main()
-	get_damage_rst_class("file.rst", new_rstfilename= "nrst.rst")
+	main()
+	#get_damage_rst_class("GI.rst",{i:"m{}.mac".format(i) for i in range(1,8) if i!=6},new_rstfilename= "nrst.rst")
