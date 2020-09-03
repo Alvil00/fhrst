@@ -8,7 +8,6 @@ import enum
 import os
 import os.path
 import collections.abc
-import pdb
 
 __author__ = 'Vilenskiy Alexey dep. 50'
 log = None
@@ -58,6 +57,7 @@ def parse_args():
 	
 	fromhcn_parser.add_argument('-i', '-list', action='store_true', help='create file with list of extracted nodes in each material folder')
 	fromhcn_parser.add_argument('-r', '-regtimefile', action='store_true', help='add file which contain sequence of time moments in each regime')
+	fromhcn_parser.add_argument('-c', '-check_acompress', action='store_true', help='check for every node - if all calculation statement stresses lesser or equal (node always in absolute compression) then zero then script hasnt create tmp file')
 	
 	fromhcn_parser.add_argument('--nodefile', type=str, help = "file which containing neseccery nodes")
 	fromhcn_parser.add_argument('--outdir', type=str, help='dir with final tmp files')
@@ -489,7 +489,7 @@ def create_regtime_file(file, sequences):
 # zeros - флаг который регулирует добавление нулевого момента времени к файлу tmp
 # listfile - флаг который создает в каждой папке материалов файл NODE.TXT со списком узлов в данной папке
 # regtime - флаг регулирующий содание файла реимов (файл n.his в папке запуска скрипта)
-def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False, zeros=False, tail=False, listfile=False, regtime=False):
+def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False, zeros=False, tail=False, listfile=False, regtime=False, check_acompress=False):
 	global log
 	# Словарь из элемнтов:ключ - номер материала, значение - множество узлов в этом материале
 	mat_node_set = {}
@@ -509,6 +509,36 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 	if regtime:
 		regtimelist = []
 	
+	for file in filelist:
+		with h5py.File(file, mode='r') as f:
+			for mat in f.keys(): 
+				# Определяем множество mat_node_set как ПЕРЕСЕЧЕНИЕ множества узлов в множестве nodeset и множества узлов в файле
+				if nodeset is not None:
+					mat_node_set[mat] = nodeset.intersection(set(map(int, f[mat].keys())))
+				# Если nodeset отсутвсвует просто берем набор узлов в файле как множество mat_node_set
+				else:
+					mat_node_set[mat] = set(map(int, f[mat].keys()))
+
+
+	if check_acompress:
+		mcz = {} # Словарь с зонами в которых будут лежать словари с узлами компремссии
+		# Проверка на абсолютное сжатие
+		for file in filelist:
+			with h5py.File(file, mode='r') as f:
+			# Для каждого материала в файле
+				for mat in f.keys():
+					try:
+						cmcz = mcz[mat]
+					except KeyError:
+						mcz[mat] = set()
+						cmcz = mcz[mat]				
+					for node in mat_node_set[mat]:
+						if node not in cmcz:
+							if numpy.max(numpy.max(f[mat][str(node)], 0)[1:]) > 0.0:
+								cmcz.add(node)
+		for mat in mcz.keys():
+			mat_node_set[mat].intersection_update(mcz[mat])
+								
 	# Для всех файлов в списке файлов hcn
 	for file in filelist:
 		wmode = 'a' if curnum > 1 else 'w'
@@ -520,19 +550,12 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 			# Для каждого материала в файле
 			for mat in f.keys():
 				# На самом первом шаге для всех файлов создаем необходимые папки для извлекаемой информации
-				if curnum==1:
-					# Определяем множество mat_node_set как ПЕРЕСЕЧЕНИЕ множества узлов в множестве nodeset и множества узлов в файле
-					if nodeset is not None:
-						mat_node_set[mat] = nodeset.intersection(set(map(int, f[mat].keys())))
-					# Если nodeset отсутвсвует просто берем набор узлов в файле как множество mat_node_set
-					else:
-						mat_node_set[mat] = set(map(int, f[mat].keys()))
+				if curnum == 1:
 					if len(mat_node_set[mat]):
 						try:
 							os.mkdir('{o}{sep}MATERIAL_{m}'.format(m=mat, sep=os.path.sep, o=outdir))
 						except FileExistsError:
 							pass
-				# Для каждого узла который входит в множество mat_node_set
 				for node in mat_node_set[mat]:
 					# Записываем в файл (файл открывается в моде 'w' при curnum==1 и в моде 'a' во всех остальных случаях)
 					of = open('{o}{sep}MATERIAL_{m}{sep}{n}n.tmp'.format(n=node, m=mat, sep=os.path.sep, o=outdir), mode=wmode)
@@ -602,7 +625,7 @@ def main():
 			log.info('nodes on border between materials will be averaged by value')
 		extract_tensor_from_rst(args.rstfile, args.hcnfile, base, excluded, excluded_type, args.a, args.v, args.sm, args.em)
 	elif args.extractor=='from-hcn':
-		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.t, args.i, args.r)
+		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.t, args.i, args.r, args.c)
 	else:
 		print('print -h or --help key to show help message.')
 	
