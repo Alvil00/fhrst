@@ -14,12 +14,14 @@ def arg_parse(arguments):
 	output_file_group.add_argument('-ocf',action="store_true",help="output as dof conc macro file. Default option.")
 	output_file_group.add_argument('-obf',action="store_true",help="output as bf macro file")
 	output_file_group.add_argument('-odf',action="store_true",help="output as damage file")
-	output_file_group.add_argument('-jrd',action="store_true",help="dont output as file, just return united dict")
+	if __name != '__main__':
+		output_file_group.add_argument('-jrd',action="store_true",help="dont output as file, just return united dict")
 	parser.add_argument('-s',action="store_true",help="silence mode")
 	parser.add_argument('-op',action="store_true",help="pipe mode")
 	parser.add_argument('files',metavar='macro_file',nargs='+',type=str,help="Macro files. Use value ALLMAC or ALLTXT to take all macro or text file in dir.")
 	args = parser.parse_args(arguments)
-
+	if __name__ == '__main__':
+		args.jrd = False
 	if len(args.files)==1 and args.files[0]=="ALLMAC":
 		args.files = [i for i in os.listdir() if (len(i)-i.lower().rfind(".mac"))==4] #Выводит файлы только с расширением .txt .TXT .TXt etc.
 	elif len(args.files)==1 and args.files[0]=="ALLTXT":

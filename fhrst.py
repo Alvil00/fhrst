@@ -628,15 +628,24 @@ class RTable:
 			self._name = name
 		else:
 			self._name = ''
-		
-		if typ is None:
-			self._type = 'i'
-		else:
-			self._type = typ
 
 		self._head = file.read(8)
 		if size is None:
 			size = struct.unpack('2i', self._head)[0]
+		
+		if typ is None:
+			typ = struct.unpack('2i', self._head)[1]
+			if typ == -2147483648:	# binary 1000 0000 0000 0000 0000 0000 0000 0000
+				self._type = 'i'
+			elif typ == 0:			# binary 0000 0000 0000 0000 0000 0000 0000 0000
+				self._type = 'd'
+			elif typ == 1073741824:	# binary 0100 0000 0000 0000 0000 0000 0000 0000
+				self._type = 'f'
+			else:
+				raise TypeError('Unknown incorporated type')
+		else:
+			self._type = typ
+		
 		self._body = list(struct.unpack('{c}{t}'.format(c=int(size // RTable.TYP[self._type]), t=self._type), file.read(size * 4)))
 		self._tail = file.read(4)
 		if size != struct.unpack('i',self._tail)[0]:
