@@ -7,6 +7,7 @@ import argparse
 import enum
 import os
 import os.path
+import sys
 import collections.abc
 
 try:
@@ -48,10 +49,10 @@ def parse_args():
 	exlcluded_items.add_argument('--nodefile', type=str, default=None, help='extract only nodes which included in this file')
 	exlcluded_items.add_argument('--elemfile', type=str, default=None, help='extract only nodes which has been owned by pointed elements which has been contained in this file. WARNING: BE CAREFUL WITH THIS OPTION!')
 	
-	fromrst_parser.add_argument('--sm', '--start_moment', default=1, type=int, help='start extraction moment - default set as one')
-	fromrst_parser.add_argument('--em', '--end_moment', default=0, type=int, help='end extraction moment - default set as zero so it means that script extract all moments till the last')
-	#fromrst_parser.add_argument('--et','--extract_type', choises=('stress', 'elastic_strains', 'plastic_strains', 'thermal_strains', 'creeep_strains'), type=str, default='stress', help='extract neseccey tensor from rst')
-	#fromrst_parser.add_argument('--mt','--mat_table', default=None, type=str, help='average results on material borders by group of materials which contained in pointed file')
+	fromrst_parser.add_argument('--sm', '--start-moment', default=1, type=int, help='start extraction moment - default set as one')
+	fromrst_parser.add_argument('--em', '--end-moment', default=0, type=int, help='end extraction moment - default set as zero so it means that script extract all moments till the last')
+	#fromrst_parser.add_argument('--et','--extract-type', choices=('stress', 'elastic_strains', 'plastic_strains', 'thermal_strains', 'creeep_strains'), type=str, default='stress', help='extract neseccey tensor from rst')
+	#fromrst_parser.add_argument('--mt','--mat-table', default=None, type=str, help='average results on material borders by group of materials which contained in pointed file')
 	
 	fromrst_parser.add_argument('--rstfile', help='name of rst file', metavar='file', required=True)
 	fromrst_parser.add_argument('--hcnfile', help='name of hcn file', metavar='file', required=True)
@@ -66,7 +67,13 @@ def parse_args():
 	
 	fromhcn_parser.add_argument('-i', '-list', action='store_true', help='create file with list of extracted nodes in each material folder')
 	fromhcn_parser.add_argument('-r', '-regtimefile', action='store_true', help='add file which contain sequence of time moments in each regime')
-	fromhcn_parser.add_argument('-c', '-check_acompress', action='store_true', help='check for every node - if all calculation statement stresses lesser or equal (node always in absolute compression) then zero then script hasnt create tmp file')
+	
+	compress_group = fromhcn_parser.add_mutually_exclusive_group()
+	compress_group.add_argument('-c', '-check-acompress', action='store_true', help='check for every node - if all calculation statement stresses lesser or equal (node always in absolute compression) then zero then script hasnt create tmp file')
+	compress_group.add_argument('-C', '-check-acompress-macro', action='store_true', help="write only the macro which contain zero values of nodes which stay in absolute compression, don't create *.tmp files, you can't use this option with -z, -t, -i, --outdir option", dest='macro_compress')
+	fromhcn_parser.add_argument('--set-check-acompress-method', type=str, default='all', choices=('normal', 'all'), help='set which determinate what components we must evaluate for checking, all or only normal', dest='ca_method')
+	fromhcn_parser.add_argument('--set-check-acompress-tolerance', type=float, default=0.0 , help='set value of overtop for stress in absolute compress checking', dest='ca_tol', metavar='TOLERANCE')
+	check_acompress_method_dict = {'all': CheckAbsoluteCompressMethod.ALL, 'normal':CheckAbsoluteCompressMethod.NORMAL}
 	
 	fromhcn_parser.add_argument('--nodefile', type=str, help = "file which containing neseccery nodes")
 	fromhcn_parser.add_argument('--outdir', type=str, help='dir with final tmp files')
@@ -85,12 +92,34 @@ def parse_args():
 	torst_loader.add_argument('--rstfile', type=str, help='name of rst file with neseccery geometry', metavar='file', required=True)
 	torst_loader.add_argument('--damfile', type=str, help='name of new accumulated damage file', metavar='file', required=True)
 	
-	torst_loader.add_argument('--mdf', '--mat_damage_file', action='append', dest='mdf', nargs=2,
+	torst_loader.add_argument('--mdf', '--mat-damage-file', action='append', dest='mdf', nargs=2,
 								help='append material damage macro file. ness 2 args - {num of material} {name of file}',
 								metavar=("material_num", "damage_file"), required=True)
 	
 	#torst_loader.add_argument('-a', '-averaged', action='store_true', help='if this flag is active chose material with try to apply damage from material number 0')
 	r = main_parser.parse_args()
+	
+	ATTRIBUTE_ERROR_TEMPLATE = sys.argv[0] + ": error: you can't use {forrbiden_options} option with option {usable_option}"
+	try:
+		if r.extractor == 'from-hcn' and r.macro_compress:
+			r.ca_method = check_acompress_method_dict[r.ca_method]
+			if unite is None:
+				raise ImportError
+			if r.z:
+				raise AttributeError(ATTRIBUTE_ERROR_TEMPLATE.format(forbidden_option='-z or -zero', usable_option='-C'))
+			if r.t:
+				raise AttributeError(ATTRIBUTE_ERROR_TEMPLATE.format(forbidden_option='-t or -tail', usable_option='-C'))
+			if r.i:
+				raise AttributeError(ATTRIBUTE_ERROR_TEMPLATE.format(forbidden_option='-i or -list', usable_option='-C'))
+			if r.outdir:
+				raise AttributeError(ATTRIBUTE_ERROR_TEMPLATE.format(forbidden_option='--outdir', usable_option='-C'))
+	except AttributeError as ae:
+		print(ae.args[0])
+		assert True
+	except ImportError:
+		print(GLOBAL_UNITE_LACK_MESSAGE)
+		print('To use -C option put unite module in neseccery directory')
+	
 	return r
 
 
@@ -506,6 +535,11 @@ def create_regtime_file(file, sequences):
 				f.write('r{n}_1 "r\t\t" {s}\n'.format(n=n, s=str(list(i))[1:-1].replace(',', '')))
 	
 
+
+class CheckAbsoluteCompressMethod(enum.Enum):	
+	ALL=0
+	NORMAL=1
+
 # Функция извлекает тензор напряжения из фала типа hcn(hdf) в файлы типа tmp
 # filelist - список имен(или путей) hcn(hdf) файлов
 # nodefile - файл с номерами узлов которые необходимо извлеч(первая строка в этом файле комментарий). Елси значение None - извлекает все узлы.
@@ -514,8 +548,15 @@ def create_regtime_file(file, sequences):
 # zeros - флаг который регулирует добавление нулевого момента времени к файлу tmp
 # listfile - флаг который создает в каждой папке материалов файл NODE.TXT со списком узлов в данной папке
 # regtime - флаг регулирующий содание файла реимов (файл n.his в папке запуска скрипта)
-def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False, zeros=False, tail=False, listfile=False, regtime=False, check_acompress=False):
+def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False, zeros=False, tail=False, listfile=False, regtime=False, check_acompress=False, check_acompress_method:CheckAbsoluteCompressMethod=CheckAbsoluteCompressMethod.ALL, check_acompress_tolerance=0.0, compression_macro=False, dont_extract=False):
 	global log
+	if verbose:
+		print('The actual list of files with data: {}'.format(str(filelist)[1:-1].replace("'",'')))
+	if check_acompress_method == CheckAbsoluteCompressMethod.ALL:
+		check_acompress_value = 7
+	elif check_acompress_method == CheckAbsoluteCompressMethod.NORMAL:
+		check_acompress_value = 4
+	
 	# Словарь из элемнтов:ключ - номер материала, значение - множество узлов в этом материале
 	mat_node_set = {}
 
@@ -524,12 +565,13 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 	else:
 		nodeset = extract_nodes(nodefile)
 		if verbose:
+			print("Nodefile {}".format(nodefile))
 			print("Length of nodefile:{}".format(len(nodeset)))
 	if outdir is None:
 		outdir = os.curdir
 	curnum = 1
 	
-	temp = None
+	temp = None 	# Шаблон вставки
 	
 	if regtime:
 		regtimelist = []
@@ -543,76 +585,85 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 				# Если nodeset отсутвсвует просто берем набор узлов в файле как множество mat_node_set
 				else:
 					mat_node_set[mat] = set(map(int, f[mat].keys()))
-
-
+	
 	if check_acompress:
-		mcz = {} # Словарь с зонами в которых будут лежать словари с узлами компремссии
+		msz = {} # Словарь с зонами в которых будут множества словари с узлами в которых есть растягивающие напряжения больше критерия check_acompress_tolerance
+		
 		# Проверка на абсолютное сжатие
 		for file in filelist:
 			with h5py.File(file, mode='r') as f:
 			# Для каждого материала в файле
 				for mat in f.keys():
 					try:
-						cmcz = mcz[mat]
+						cmsz = msz[mat]
 					except KeyError:
-						mcz[mat] = set()
-						cmcz = mcz[mat]				
+						msz[mat] = set()
+						cmsz = msz[mat]				
 					for node in mat_node_set[mat]:
-						if node not in cmcz:
-							if numpy.max(numpy.max(f[mat][str(node)], 0)[1:]) > 0.0:
-								cmcz.add(node)
-		for mat in mcz.keys():
-			mat_node_set[mat].intersection_update(mcz[mat])
-								
+						if node not in cmsz:
+							if numpy.max(numpy.max(f[mat][str(node)], 0)[1:check_acompress_value]) > check_acompress_tolerance:
+								cmsz.add(node)
+		for mat in msz.keys():
+			if compression_macro:
+				compression_dict = {i:0.0 for i in set.difference(mat_node_set[mat], msz[mat])}
+				if len(compression_dict):
+					if verbose:
+						print("Write list of comperssion nodes in mat_compression_macro_{}.mac. Number of nodes in absolute compression : {}.".format(mat, len(compression_dict)))
+					unite.generate_visulise_macro(compression_dict, "mat_compression_macro_{}.mac".format(mat), no_comment=True)
+			if not dont_extract:
+				mat_node_set[mat].intersection_update(msz[mat])
+		
+			
 	# Для всех файлов в списке файлов hcn
-	for file in filelist:
-		wmode = 'a' if curnum > 1 else 'w'
-		regime_name = os.path.basename(file).split('.')[0][:11]
-		if verbose:
-			print("Try to unpack {}".format(os.path.basename(file)))
-		# Пытаемся открыть файл на чтение
-		with h5py.File(file, mode='r') as f:
-			# Для каждого материала в файле
-			for mat in f.keys():
-				# На самом первом шаге для всех файлов создаем необходимые папки для извлекаемой информации
-				if curnum == 1:
-					if len(mat_node_set[mat]):
-						try:
-							os.mkdir('{o}{sep}MATERIAL_{m}'.format(m=mat, sep=os.path.sep, o=outdir))
-						except FileExistsError:
-							pass
-				for node in mat_node_set[mat]:
-					# Записываем в файл (файл открывается в моде 'w' при curnum==1 и в моде 'a' во всех остальных случаях)
-					of = open('{o}{sep}MATERIAL_{m}{sep}{n}n.tmp'.format(n=node, m=mat, sep=os.path.sep, o=outdir), mode=wmode)
-					k = numpy.array(f[mat][str(node)])
-					# При флаге zeros добавляем в файл строку с нулевым моментом времени
-					if curnum == 1 and zeros:
-						of.write(FOUR_TEMPLATE.format(a = (20.0, 0.0, 0.0, 0.0, 0.0), num=0, rname="NULL"))
-					# Для каждого момента времени в узле в файле
-					for n,i in enumerate(k, curnum):
-						if temp is None and n==1:
-							if k.shape[1]==5:
-								temp = FOUR_TEMPLATE
-							else:
-								temp = SIX_TEMPLATE
-						# Записываем строку с тензором
-						of.write(temp.format(a=i, num=n, rname=regime_name))
-					if file == filelist[-1] and tail:
-						of.write(FOUR_TEMPLATE.format(a = (20.0, 0.0, 0.0, 0.0, 0.0), num=n + 1, rname="NULL"))
-					of.close()
+	if not dont_extract:
+		for file in filelist:
+			wmode = 'a' if curnum > 1 else 'w'
+			regime_name = os.path.basename(file).split('.')[0][:11]
+			if verbose:
+				print("Try to unpack {}".format(os.path.basename(file)))
+			# Пытаемся открыть файл на чтение
+			with h5py.File(file, mode='r') as f:
+				# Для каждого материала в файле
+				for mat in f.keys():
+					# На самом первом шаге для всех файлов создаем необходимые папки для извлекаемой информации
+					if curnum == 1:
+						if len(mat_node_set[mat]):
+							try:
+								os.mkdir('{o}{sep}MATERIAL_{m}'.format(m=mat, sep=os.path.sep, o=outdir))
+							except FileExistsError:
+								pass
+					for node in mat_node_set[mat]:
+						# Записываем в файл (файл открывается в моде 'w' при curnum==1 и в моде 'a' во всех остальных случаях)
+						of = open('{o}{sep}MATERIAL_{m}{sep}{n}n.tmp'.format(n=node, m=mat, sep=os.path.sep, o=outdir), mode=wmode)
+						k = numpy.array(f[mat][str(node)])
+						# При флаге zeros добавляем в файл строку с нулевым моментом времени
+						if curnum == 1 and zeros:
+							of.write(FOUR_TEMPLATE.format(a = (20.0, 0.0, 0.0, 0.0, 0.0), num=0, rname="NULL"))
+						# Для каждого момента времени в узле в файле
+						for n,i in enumerate(k, curnum):
+							if temp is None and n==1:
+								if k.shape[1]==5:
+									temp = FOUR_TEMPLATE
+								else:
+									temp = SIX_TEMPLATE
+							# Записываем строку с тензором
+							of.write(temp.format(a=i, num=n, rname=regime_name))
+						if file == filelist[-1] and tail:
+							of.write(FOUR_TEMPLATE.format(a = (20.0, 0.0, 0.0, 0.0, 0.0), num=n + 1, rname="NULL"))
+						of.close()
+			if regtime:
+				regtimelist.append(range(curnum, n + 1))
+			# Принимаем curnum n+1 для того чтобы момент времени из следующего файла пошел под сквозной нумерацией 
+			curnum = n + 1
+		if listfile:
+			for mat in mat_node_set.keys():
+				if len(mat_node_set[mat]):
+					with open("{o}{sep}MATERIAL_{m}{sep}ZONA1.txt".format(m=mat, sep=os.path.sep, o=outdir), mode='w') as zf:
+						zf.write("%i//\n" % len(mat_node_set[mat]))
+						for i in sorted(mat_node_set[mat]):
+							zf.write("%i\n" % i)
 		if regtime:
-			regtimelist.append(range(curnum, n + 1))
-		# Принимаем curnum n+1 для того чтобы момент времени из следующего файла пошел под сквозной нумерацией 
-		curnum = n + 1
-	if listfile:
-		for mat in mat_node_set.keys():
-			if len(mat_node_set[mat]):
-				with open("{o}{sep}MATERIAL_{m}{sep}ZONA1.txt".format(m=mat, sep=os.path.sep, o=outdir), mode='w') as zf:
-					zf.write("%i//\n" % len(mat_node_set[mat]))
-					for i in sorted(mat_node_set[mat]):
-						zf.write("%i\n" % i)
-	if regtime:
-		create_regtime_file('n.his', regtimelist)
+			create_regtime_file('n.his', regtimelist)
 
 class RTable:
 	TYP = {
@@ -878,7 +929,7 @@ def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 				if verbose:
 					if num % (len(elemresults) // 1000) == 0:
 						print('Write results {}/{}\t\t'.format(num, len(elemresults)), end='\r')
-					print('{a}/{a}\t\t'.format(a=len(elemresults)))
+			print('Write results {a}/{a}\t\t\n'.format(a=len(elemresults)), end='\r')
 			
 def main():
 	global log
@@ -915,7 +966,7 @@ def main():
 			log.info('nodes on border between materials will be averaged by value')
 		extract_tensor_from_rst(args.rstfile, args.hcnfile, base, excluded, excluded_type, args.a, args.v, args.sm, args.em)
 	elif args.extractor=='from-hcn':
-		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.t, args.i, args.r, args.c)
+		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.t, args.i, args.r, args.c or args.macro_compress, args.ca_method, args.ca_tol, args.macro_compress, args.macro_compress)
 	elif args.extractor == 'to-rst':
 		if unite:
 			mdf = {}
@@ -932,7 +983,6 @@ def main():
 			print(GLOBAL_UNITE_LACK_MESSAGE)
 	else:
 		print('print -h or --help key to show help message.')
-	
 	
 if __name__=="__main__":
 	main()
