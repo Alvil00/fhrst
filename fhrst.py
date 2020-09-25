@@ -693,6 +693,7 @@ class RTable:
 			elif typ == 1073741824:	# binary 0100 0000 0000 0000 0000 0000 0000 0000
 				self._type = 'f'
 			else:
+				pdb.set_trace()
 				raise TypeError('Unknown incorporated type')
 		else:
 			self._type = typ
@@ -751,11 +752,10 @@ def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 		nsets = rst_header[8]
 		start_point = dsi_table[0]
 		if nsets == 1:
-			pass
+			end_point = info_header[26]
 		else:
 			end_point = dsi_table[1]
 		
-		#print(dsi_table)
 		time_table = RTable(f, typ='d')
 		lsp_table = RTable(f)
 		
@@ -837,7 +837,7 @@ def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 		esl_table = RTable(f, typ='q')
 
 		elemresults = []
-		#filter(lambda a: a[1]==0, list(zip(elm_table ,esl_table)).sort(key=lambda a:a[1]))
+
 		elems_walk = list(filter(lambda a: a[1]!=0, zip(elm_table ,esl_table)))
 		elems_walk.sort(key=lambda a:a[1])
 
@@ -850,6 +850,13 @@ def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 			except KeyError:
 				curmat = -100
 				nlist = []
+			# Это условие было добавлено для версии 16.2
+			# В этой версии после данных о результатах в элементе существует 9 непонятных чисел, неотраженных в спецификации
+			# Костыль добавляет их в общие результаты
+			cur_elem_pos = (elem + ptr_esl + start_point) * 4
+			if cur_elem_pos != f.tell():
+				unknown_string = cur_elem_pos - f.tell()
+				elemresults.append(f.read(unknown_string))
 			elemresult = RTable(f)
 			elemresults.append(elemresult)
 			for inum ,item in enumerate(elemresult):
