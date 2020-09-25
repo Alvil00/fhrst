@@ -8,7 +8,9 @@ import enum
 import os
 import os.path
 import sys
+import collections
 import collections.abc
+
 
 try:
 	import unite
@@ -70,7 +72,7 @@ def parse_args():
 	
 	compress_group = fromhcn_parser.add_mutually_exclusive_group()
 	compress_group.add_argument('-c', '-check-acompress', action='store_true', help='check for every node - if all calculation statement stresses lesser or equal (node always in absolute compression) then zero then script hasnt create tmp file')
-	compress_group.add_argument('-C', '-check-acompress-macro', action='store_true', help="write only the macro which contain zero values of nodes which stay in absolute compression, don't create *.tmp files, you can't use this option with -z, -t, -i, --outdir option", dest='macro_compress')
+	compress_group.add_argument('-C', '-check-acompress-macro', action='store_true', help="write only the macro which contain zero values of nodes which stay in absolute compression, don't create *.tmp files, you can't use this option with -z, -t, -i, --outdir, -r option", dest='macro_compress')
 	fromhcn_parser.add_argument('--set-check-acompress-method', type=str, default='all', choices=('normal', 'all'), help='set which determinate what components we must evaluate for checking, all or only normal', dest='ca_method')
 	fromhcn_parser.add_argument('--set-check-acompress-tolerance', type=float, default=0.0 , help='set value of overtop for stress in absolute compress checking', dest='ca_tol', metavar='TOLERANCE')
 	check_acompress_method_dict = {'all': CheckAbsoluteCompressMethod.ALL, 'normal':CheckAbsoluteCompressMethod.NORMAL}
@@ -111,6 +113,8 @@ def parse_args():
 				raise AttributeError(ATTRIBUTE_ERROR_TEMPLATE.format(forbidden_option='-t or -tail', usable_option='-C'))
 			if r.i:
 				raise AttributeError(ATTRIBUTE_ERROR_TEMPLATE.format(forbidden_option='-i or -list', usable_option='-C'))
+			if r.r:
+				raise AttributeError(ATTRIBUTE_ERROR_TEMPLATE.format(forbidden_option='-r or -regtimefile', usable_option='-C'))
 			if r.outdir:
 				raise AttributeError(ATTRIBUTE_ERROR_TEMPLATE.format(forbidden_option='--outdir', usable_option='-C'))
 	except AttributeError as ae:
@@ -175,7 +179,7 @@ class Element:
 				
 	@classmethod
 	def frombytes(cls, num, bseq):
-		global TABLE_OF_TYPES
+		global TABLE_OF_ETYPES
 		k = struct.unpack('{}i'.format(30), bseq)
 		nnodes = 0
 		et = TABLE_OF_ETYPES.get(k[1])
@@ -208,7 +212,7 @@ class MatZone:
 		self.mat = matnum
 
 		
-class ExcludedType(enum.Enum):
+class IncludedType(enum.Enum):
 	NON = 0
 	NODE = 1
 	ELEMENT = 2
@@ -249,50 +253,37 @@ def last_substep_generator(ls, p_steps):
 # rstname - имя входного файла разрешения *.rst
 # hсnname - имя выходного файла (если None - то возвращает структуру)
 # base - количество независмых ненулевых компонент в извлекаемом тензоре (4 - при духмерном случае, 6 - при произвольном случае)
-# excluded_set - исключенное множество элементов или узлов для которых будет извлечен тензор
-# excluded_type - тип исключенного множества (элементы или узлы)
+# included_set - включенное множество элементов или узлов для которых будет извлечен тензор
+# included_type - тип включенного множества (элементы или узлы)
 # average - флаг отвечающий за усреднение на границах раздела материалов
 # verbose - выводит больше информации
 # start_moment - начальный loadstep извлечения
 # end_moment - конечный loadstep извлечения (если 0 - извлекает до посленего loadstep).
-def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, excluded_set=None, excluded_type:ExcludedType=ExcludedType.NON, average=False, verbose=False, start_moment=1, end_moment=0):
+def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, included_set=None, included_type:IncludedType=IncludedType.NON, average=False, verbose=False, start_moment=1, end_moment=0):
 	global log
+	global TABLE_OF_ETYPES
+	if verbose:
+		print("From file {}".format(rstname))
 	with open(rstname, 'rb', buffering=0) as f:
-		# Этот участок для чтения частей заголовка
-		f.seek(12)
-		d = f.read(4)	
-		file_format = struct.unpack('i', d)[0]
+		# Чтение основного бинарного заголовка ANSYS
+		info_header = RTable(f)
+		file_format = info_header[1]
+		ansys_version = float(struct.unpack('4s', struct.pack('i', info_header[9]))[0][::-1])
+		max_file_length = info_header[26]
 		
-		f.seek(28, 1)
-		d = f.read(4)
-		ansys_version = float(struct.unpack('4s', d)[0][::-1])
 		
-		f.seek(8 + 26 * 4, 0)
-		d = f.read(4)
-		max_file_length = struct.unpack('i', d)[0]
-		
-		f.seek(424)
-		d = f.read(36)
-		maxn, nnod, resmax, numdof, maxe, nelm, kan, nsets, ptrend = struct.unpack('9i', d)
-		
-		d = f.read(24)
-		ptr_data_steps, ptr_time_val, ptr_ls, ptr_elems, ptr_nodes, ptr_geom = struct.unpack('6i', d)
-		
-		# Список узлов
-		f.seek(ptr_nodes * 4 + 8)
-		d = f.read(4 * nnod)
-		nodes = list(struct.unpack('{}i'.format(nnod), d))
-		nodes.sort()
+		# Чтение заголовка rst
+		rst_header = RTable(f)
+		maxn, nnod, resmax, numdof, maxe, nelm, kan, nsets, ptrend = rst_header[1:10]
+		ptr_data_steps, ptr_time_val, ptr_ls, ptr_elems, ptr_nodes, ptr_geom = rst_header[10:16]
 
 		# Список элементов
-		f.seek(ptr_elems * 4 + 8)
-		d = f.read(4 * nelm)
-		elements = list(struct.unpack('{}i'.format(nelm), d))
+		f.seek(ptr_elems * 4)
+		elements = RTable(f)
 		
 		# Список шагов
-		f.seek(ptr_data_steps * 4 + 8)
-		d = f.read(4 * nsets)
-		ptr_steps = list(struct.unpack('{}I'.format(nsets), d))
+		f.seek(ptr_data_steps * 4)
+		ptr_steps = RTable(f)
 		max_int_size_step = ptr_steps[0]
 		
 		# Поиск шага при котором указатель на него становится длиным (длинный указатель вычиляется как lptr = 2**34 + ptr)
@@ -303,29 +294,27 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 			max_int_size_step = i
 		
 		# Таблица шагов, подшагов и итераций - нужна для определения последних подшагов
-		f.seek(ptr_ls * 4 + 8)
-		d = f.read(12 * nsets)
-		ls_array = numpy.frombuffer(d, dtype=numpy.int32)
+		f.seek(ptr_ls * 4)
+		ls_array = numpy.array(RTable(f)[0:nsets * 3])
 		ls_array = numpy.reshape(ls_array, (nsets, 3))
 		ls_final_list = list(last_substep_generator(ls_array, ptr_steps))
 		nfsets = len(ls_final_list)
 	
 		# Доступ к геометрии
-		f.seek((ptr_geom) * 4 + 8)
-		d = f.read(180)
-		k = struct.unpack('45i', d)
-		n_etypes = k[1]
-		ptr_etypes = k[20] + k[21]
-		size = k[18]
+		f.seek(ptr_geom * 4)
+		geom_header = RTable(f)
+		n_etypes = geom_header[1]
+		size = geom_header[18]
+		ptr_etypes = geom_header[20] + geom_header[21]
 		
 		# Если работает усреднение на границах материалов (аргумент функции average) просто представляем все элементы как один материал
 		if not average:
-			n_mat = k[13]
+			n_mat = geom_header[13]
 		else:
 			n_mat = 1
 		
 		# Находим длинный указатель на таблицу элементов
-		ptr_eid = k[28] + k[29]
+		ptr_eid = geom_header[28] + geom_header[29]
 		
 		# Логирование информации
 		if log:
@@ -353,17 +342,14 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 			log.info((u"└─>{o[0]:5}{o[1]:5}{o[2]:5}".format(o=current_set)))
 		
 		# Доступ к типам элементов
-		f.seek(ptr_etypes * 4 + 8)
-		d = f.read(4 * n_etypes)
-		etypes_ptr_list = list(struct.unpack('{}i'.format(n_etypes), d))
-		for i in etypes_ptr_list:
-			f.seek((i + ptr_etypes) * 4 + 8)
-			d = f.read(8)
-			etn = struct.unpack('ii', d)
-			f.seek(364, 1)
-			d = f.read(4)
-			nnodes_per_element_ws = struct.unpack('i', d)
-			TABLE_OF_ETYPES[etn[0]] = (etn[1], nnodes_per_element_ws[0])
+		f.seek(ptr_etypes * 4)
+		etypes_ptr_list = RTable(f)
+		for ptr_local in etypes_ptr_list:
+			f.seek((ptr_local + ptr_etypes) * 4)
+			current_etype = RTable(f)
+			etn = current_etype[0:2]
+			nnodes_per_element_ws = current_etype[93]
+			TABLE_OF_ETYPES[etn[0]] = (etn[1], nnodes_per_element_ws)
 		
 		# Назначаем количество ненулевых элементов в извлекаемом тензоре при отсутствии назначенного
 		# Если значение base при передачи в аргументы функции находится не в допускаемом множестве значений (4,6) то пытаемся сами назначить значение base
@@ -374,20 +360,20 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 			else:
 				base = 6
 		
+		# Необходимо чтобы не вычислять это значение каждый раз в цикле
 		base_plus_temp = base + 1
 		
-		if excluded_type == ExcludedType.ELEMENT:
-			elements_walk = find_index_list(excluded_set, elements)
+		if included_type == IncludedType.ELEMENT:
+			elements_walk = find_index_list(included_set, elements)
 	
 			
 		# Строим таблицу элементов
-		f.seek(ptr_eid * 4 + 8)
-		d = f.read(8 * nelm)
-		ptr_elem_table = struct.unpack('{}q'.format(nelm), d)
+		f.seek(ptr_eid * 4)
+		ptr_elem_table = RTable(f, typ='q')
 		enod_table = {}
 		
-		# Определяем element walk - способ прохождения по всем исключенным элементам для разных типов excluded set
-		if excluded_type == ExcludedType.NON or excluded_type == ExcludedType.NODE:
+		# Определяем element walk - способ прохождения по всем включенным элементам для разных типов included set
+		if included_type == IncludedType.NON or included_type == IncludedType.NODE:
 			for enum, etable_ptr in zip(elements, ptr_elem_table):
 				f.seek((ptr_eid + 2 + etable_ptr) * 4)
 				d = f.read(120)
@@ -396,7 +382,7 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 					if average:
 						_e.mat = 1
 					enod_table[enum] = _e
-		elif excluded_type==ExcludedType.ELEMENT:
+		elif included_type==IncludedType.ELEMENT:
 			for enumintable, enum in elements_walk:
 				f.seek((ptr_eid + 2 + ptr_elem_table[enumintable]) * 4)
 				d = f.read(120)
@@ -404,29 +390,32 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 				if _e is not None:
 					enod_table[enum] = _e
 		
-		if excluded_type==ExcludedType.NODE:
+		if included_type==IncludedType.NODE:
 			elements_walk = []
 			for enumintable, enum in enumerate(elements):
 				cur_elem = enod_table.get(enum, None)
-				if cur_elem is not None and any(map(lambda x:x in excluded_set, cur_elem.nlist)):
+				if cur_elem is not None and any(map(lambda x:x in included_set, cur_elem.nlist)):
 					elements_walk.append((enumintable, enum))		
 
 				
 		# Назначаем начальный извлекаемый момент времени и конечный извлекаемый момент времени
 		if start_moment==1 and end_moment==0:
 			time_moment_check_ranage = None
+			end_moment = nfsets
 		else:
 			if end_moment==0:
 				end_moment = nfsets
-			if end_moment<=start_moment:
+			if end_moment < start_moment:
 				raise IndexError("Wrong end moment: it is lesser then start moment")
-			if end_moment>nfsets:
+			if end_moment > nfsets:
 				raise IndexError("Wrong end moment: it is bigger than file last moment")
-			if start_moment<=0:
+			if start_moment <= 0:
 				raise IndexError("Wrong start moment: it is lesser than zero or equal to then")
 			time_moment_check_ranage = range(start_moment, end_moment + 1)
 			nfsets = len(time_moment_check_ranage)
-		
+		if verbose:
+			print("Start moment:\t{:>7}".format(start_moment))
+			print("End moment:\t{:>7}".format(end_moment))
 		# Итоговая результирующая структура которая будет хранить финальные результаты
 		result_structure = {}
 		
@@ -444,25 +433,25 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 		
 		# Основной цикл который извлекает тензор и температуры на каждом шаге
 		for step_num, (set_num, step_ptr) in enumerate(ls_final_list, 1):
-			if set_num>=max_int_size_step - 1:
+			if set_num >= max_int_size_step - 1:
 				add_size = _add_size
 			f.seek(step_ptr * 4 + 8 + add_size)  # Переходим к заголовку режима
 			d = f.read(48)			# Считываем заголовок	
 			s_header = struct.unpack('12i', d)
 			extracted_step_num = s_header[4]		# Текущий номер режима извлеченный из таблицы
 			esol_ptr = s_header[11]	# Указатель на element solution items (указатели измеряются от начала текущего режима)
-			if extracted_step_num==step_num:
+			if extracted_step_num == step_num:
 				if time_moment_check_ranage is not None and extracted_step_num not in time_moment_check_ranage:
 					continue
 				if verbose:
-					print("timemoment %i" % extracted_step_num)
+					print("Current time moment read {}/{}\t".format(extracted_step_num, end_moment),end='\r')
 				esol_ptr_int = (esol_ptr - 12) * 4
 				f.seek(esol_ptr_int, 1) # Перемещаемся к таблицы в которой содержаться указатели на решение в каждом из элеметов
 				# По всем элементам
 				d = f.read(8 * nelm) # Считываем ленту элементов (ряд указателей на реузльтаты)
 				f.seek(-8 * nelm, 1)
 				h = struct.unpack('{}q'.format(nelm), d)
-				if excluded_type == ExcludedType.NON:
+				if included_type == IncludedType.NON:
 					elements_walk = enumerate(elements)
 				for progress, elementnum in elements_walk:
 					element_instance = enod_table.get(elementnum, None)
@@ -485,7 +474,7 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 						if corner_node is None:	
 							cur_nlist[corner_node_num] = Node(corner_node_num, nfsets, base_plus_temp)
 							corner_node = cur_nlist.get(corner_node_num)
-						if step_num==1:
+						if step_num == start_moment:
 							corner_node.num_of_parents_addone()
 						d = f.read(24)
 						stresses_[corner_node_num] = d
@@ -503,25 +492,27 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, exclude
 				raise IndexError("Wrong time moment {} at number {}.Programm will be terminated".format(extracted_step_num, step_num))
 				
 		# Усредняем знчаения напряжений для элементов
-		if excluded_type != ExcludedType.NODE:
+		if included_type != IncludedType.NODE:
 			for zone in result_structure.keys():
 				for node in result_structure[zone].nlist.values():
 					node.norm()
 		else:
 			# В случае если тип услючения у нас стоит по узлам, мы все равно пробегали по всем узлам что принадлежат их родительским элементам.
-			# Таким образом необходимо отсеять узлы которые не входили в excluded set
+			# Таким образом необходимо отсеять узлы которые не входили в included set
 			for zone in result_structure.keys():
-				lost_nodes = set(result_structure[zone].nlist.keys()).difference(excluded_set)
+				lost_nodes = set(result_structure[zone].nlist.keys()).difference(included_set)
 				for node in lost_nodes:
 					result_structure[zone].nlist.pop(node)
 				for node in result_structure[zone].nlist.values():
-					if node.num in excluded_set:
+					if node.num in included_set:
 						node.norm()
 		
 		
 		# Экспорт в файл или вернуть как структуру в случае если outname is None
 		if hcnname is not None:
 			export_to_mat_zone_bin_file(hcnname, result_structure)
+			if verbose:
+				print("\nFile {} has been written".format(hcnname))
 			return None
 		else:
 			return result_structure
@@ -547,7 +538,7 @@ class CheckAbsoluteCompressMethod(enum.Enum):
 # verbose - выводить в консоль больше информации
 # zeros - флаг который регулирует добавление нулевого момента времени к файлу tmp
 # listfile - флаг который создает в каждой папке материалов файл NODE.TXT со списком узлов в данной папке
-# regtime - флаг регулирующий содание файла реимов (файл n.his в папке запуска скрипта)
+# regtime - флаг регулирующий содание файла режимов (файл n.his в папке запуска скрипта)
 def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False, zeros=False, tail=False, listfile=False, regtime=False, check_acompress=False, check_acompress_method:CheckAbsoluteCompressMethod=CheckAbsoluteCompressMethod.ALL, check_acompress_tolerance=0.0, compression_macro=False, dont_extract=False):
 	global log
 	if verbose:
@@ -693,7 +684,6 @@ class RTable:
 			elif typ == 1073741824:	# binary 0100 0000 0000 0000 0000 0000 0000 0000
 				self._type = 'f'
 			else:
-				pdb.set_trace()
 				raise TypeError('Unknown incorporated type')
 		else:
 			self._type = typ
@@ -952,26 +942,26 @@ def main():
 			log.info('additional information will be output in console.')
 	if args.extractor=='from-rst':
 		base = None
-		excluded_type = ExcludedType.NON
+		included_type = IncludedType.NON
 		if args.elemfile is not None:
-			excluded = extract_nodes(args.elemfile)
-			excluded_type = ExcludedType.ELEMENT
+			included = extract_nodes(args.elemfile)
+			included_type = IncludedType.ELEMENT
 			if log:
 				log.info('extract nodes which owned by elements which lie in {} file'.foramt(args.elemfile))
 		elif args.nodefile is not None:
-			excluded = extract_nodes(args.nodefile)
-			excluded_type = ExcludedType.NODE
+			included = extract_nodes(args.nodefile)
+			included_type = IncludedType.NODE
 			if log:
 				log.info('extract nodes which contain in {} file'.foramt(args.nodefile))
 		else:
-			excluded = None
+			included = None
 			if log:
 				log.info('no exclusion for any item')
 		if args.f:
 			base = 6
 		if args.a and log:
 			log.info('nodes on border between materials will be averaged by value')
-		extract_tensor_from_rst(args.rstfile, args.hcnfile, base, excluded, excluded_type, args.a, args.v, args.sm, args.em)
+		extract_tensor_from_rst(args.rstfile, args.hcnfile, base, included, included_type, args.a, args.v, args.sm, args.em)
 	elif args.extractor=='from-hcn':
 		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.t, args.i, args.r, args.c or args.macro_compress, args.ca_method, args.ca_tol, args.macro_compress, args.macro_compress)
 	elif args.extractor == 'to-rst':
