@@ -48,8 +48,8 @@ def parse_args():
 	
 	
 	exlcluded_items = fromrst_parser.add_mutually_exclusive_group()
-	exlcluded_items.add_argument('--nodefile', type=str, default=None, help='extract only nodes which included in this file')
-	exlcluded_items.add_argument('--elemfile', type=str, default=None, help='extract only nodes which has been owned by pointed elements which has been contained in this file. WARNING: BE CAREFUL WITH THIS OPTION!')
+	exlcluded_items.add_argument('--nodefile', type=str, default=None, help='extract only nodes included in this file')
+	exlcluded_items.add_argument('--elemfile', type=str, default=None, help='extract only nodes have been belonged pointed elements have been contained in this file. WARNING: BE CAREFUL WITH THIS OPTION!')
 	
 	fromrst_parser.add_argument('--sm', '--start-moment', default=1, type=int, help='start extraction moment - default set as one')
 	fromrst_parser.add_argument('--em', '--end-moment', default=0, type=int, help='end extraction moment - default set as zero so it means that script extract all moments till the last')
@@ -165,13 +165,11 @@ class Element:
 				self.nlist.pop()
 		elif TABLE_OF_ETYPES.get(self.etype)[0]!=187 and TABLE_OF_ETYPES.get(self.etype)[0] in SOLID_ELEMENTS:
 			if self.nlist[2]==self.nlist[3] and self.nlist[4]==self.nlist[5]: #Thetra optinon
-				self.nlist = self.nlist[:2]
-				self.nlist.append(self.nlist[4])
+				self.nlist = self.nlist[:2] + [self.nlist[4],]
 			elif self.nlist[4]==self.nlist[5]:	#Pyramid option
 				self.nlist = self.nlist[:4]
 			elif self.nlist[2]==self.nlist[3]:  #Prism option
-				self.nlist = self.nlist[:3]
-				self.nlist.extend(self.nlist[4:8])
+				self.nlist = self.nlist[:3] + self.nlist[4:7]
 			else:
 				pass
 		else:
