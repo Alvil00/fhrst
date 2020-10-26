@@ -100,11 +100,11 @@ def parse_args():
 	
 	#torst_loader.add_argument('-a', '-averaged', action='store_true', help='if this flag is active chose material with try to apply damage from material number 0')
 	r = main_parser.parse_args()
-	
+	if r.extractor == 'from-hcn':
+		r.ca_method = check_acompress_method_dict[r.ca_method]
 	ATTRIBUTE_ERROR_TEMPLATE = sys.argv[0] + ": error: you can't use {forrbiden_options} option with option {usable_option}"
 	try:
 		if r.extractor == 'from-hcn' and r.macro_compress:
-			r.ca_method = check_acompress_method_dict[r.ca_method]
 			if unite is None:
 				raise ImportError
 			if r.z:
@@ -285,11 +285,13 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, include
 		max_int_size_step = ptr_steps[0]
 		
 		# Поиск шага при котором указатель на него становится длиным (длинный указатель вычиляется как lptr = 2**34 + ptr)
-		for n, i in enumerate(ptr_steps):
-			if max_int_size_step>i:
-				max_int_size_step = n + 1
-				break
-			max_int_size_step = i
+		pstep = ptr_steps[0]
+		miszs = []
+		for n, i in enumerate(ptr_steps[1:],1):
+			if pstep > i:
+				miszs.append(n + 1)
+			pstep = i
+		max_int_size_step = iter(miszs)
 		
 		# Таблица шагов, подшагов и итераций - нужна для определения последних подшагов
 		f.seek(ptr_ls * 4)
@@ -428,11 +430,12 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, include
 		# Переменная curnum используется чтобы в случае несоответствии количества режимов при назначенных startmoment и endmoment 
 		# режимы извекались под правильным номером
 		curnum = 0
-		
+		current_max_int_size_step = next(max_int_size_step)
 		# Основной цикл который извлекает тензор и температуры на каждом шаге
 		for step_num, (set_num, step_ptr) in enumerate(ls_final_list, 1):
-			if set_num >= max_int_size_step - 1:
-				add_size = _add_size
+			if set_num >= current_max_int_size_step - 1:
+				add_size += _add_size
+				current_max_int_size_step = next(max_int_size_step)
 			f.seek(step_ptr * 4 + 8 + add_size)  # Переходим к заголовку режима
 			d = f.read(48)			# Считываем заголовок	
 			s_header = struct.unpack('12i', d)
@@ -945,12 +948,12 @@ def main():
 			included = extract_nodes(args.elemfile)
 			included_type = IncludedType.ELEMENT
 			if log:
-				log.info('extract nodes which owned by elements which lie in {} file'.foramt(args.elemfile))
+				log.info('extract nodes which owned by elements which lie in {} file'.format(args.elemfile))
 		elif args.nodefile is not None:
 			included = extract_nodes(args.nodefile)
 			included_type = IncludedType.NODE
 			if log:
-				log.info('extract nodes which contain in {} file'.foramt(args.nodefile))
+				log.info('extract nodes which contain in {} file'.format(args.nodefile))
 		else:
 			included = None
 			if log:
