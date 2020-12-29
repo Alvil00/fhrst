@@ -155,6 +155,7 @@ def extract_nodes(filename=None, com_str=1, format=(int,)):
 # Класс описывающий элементы для функции extract_tensor_from_rst
 class Element:
 	__slots__ = ['num', 'mat', 'etype', 'nlist']
+	
 	def __init__(self, num, mat, etype, nlist):
 		self.num = num
 		self.mat = mat
@@ -174,7 +175,8 @@ class Element:
 				pass
 		else:
 			pass
-				
+	
+	# Метод для инициализации элементов из последовательности бинарных данных по 30 int
 	@classmethod
 	def frombytes(cls, num, bseq):
 		global TABLE_OF_ETYPES
@@ -203,7 +205,7 @@ class Node:
 	def num_of_parents_addone(self):
 		self._num_of_parents += 1
 
-	
+# Класс в котором хранится номер материала и все принадлежащие к нему узлы
 class MatZone:
 	def __init__(self, matnum):
 		self.nlist = {}
@@ -264,6 +266,8 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, include
 		print("From file {}".format(rstname))
 	with open(rstname, 'rb', buffering=0) as f:
 		# Чтение основного бинарного заголовка ANSYS
+		if verbose:
+			print('Start to read header data...')
 		info_header = RTable(f)
 		file_format = info_header[1]
 		ansys_version = float(struct.unpack('4s', struct.pack('i', info_header[9]))[0][::-1])
@@ -316,8 +320,10 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, include
 		# Находим длинный указатель на таблицу элементов
 		ptr_eid = geom_header[28] + geom_header[29]
 		
-		# Логирование информации
+		# Логгирование информации
 		if log:
+			if verbose:
+				print('Write some log information...')
 			log.info('ff\t {}'.format(file_format))
 			log.info('matnum\t {}'.format(n_mat))
 			log.info('aver\t {}'.format(ansys_version))
@@ -366,7 +372,8 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, include
 		if included_type == IncludedType.ELEMENT:
 			elements_walk = find_index_list(included_set, elements)
 	
-			
+		if verbose:
+			print('Build element table...')
 		# Строим таблицу элементов
 		f.seek(ptr_eid * 4)
 		ptr_elem_table = RTable(f, typ='q')
@@ -426,7 +433,8 @@ def extract_tensor_from_rst(rstname='file.rst', hcnname=None, base=None, include
 		# При привышении указателя размером 2**34 к нему надо добавлять это число
 		add_size = 0
 		_add_size = 17179869184 #2**34
-		
+		if verbose:
+			print("Start the main read cycle...")
 		# Переменная curnum используется чтобы в случае несоответствии количества режимов при назначенных startmoment и endmoment 
 		# режимы извекались под правильным номером
 		curnum = 0
@@ -527,19 +535,25 @@ def create_regtime_file(file, sequences):
 				f.write('r{n}_1 "r\t\t" {s}\n'.format(n=n, s=str(list(i))[1:-1].replace(',', '')))
 	
 
-
+# Метод определения абсолютного сжатия в узле
 class CheckAbsoluteCompressMethod(enum.Enum):	
-	ALL=0
+	ALL=0	
 	NORMAL=1
 
-# Функция извлекает тензор напряжения из фала типа hcn(hdf) в файлы типа tmp
+# Функция извлекает необходимый тензор из фала типа hcn(hdf) в файлы типа tmp
 # filelist - список имен(или путей) hcn(hdf) файлов
 # nodefile - файл с номерами узлов которые необходимо извлеч(первая строка в этом файле комментарий). Елси значение None - извлекает все узлы.
 # outdir - папка в которую извлекаются узлы
 # verbose - выводить в консоль больше информации
-# zeros - флаг который регулирует добавление нулевого момента времени к файлу tmp
+# zeros - флаг который регулирует добавление нулевого момента времени к файлу tmp в первую строку
+# tail - флаг который регулирует добавление нулевого момента времени к файлу tmp в последнюю строку
 # listfile - флаг который создает в каждой папке материалов файл NODE.TXT со списком узлов в данной папке
 # regtime - флаг регулирующий содание файла режимов (файл n.his в папке запуска скрипта)
+# check_acompress - флаг который включает проверку узла на абсолютное сжатие
+# check_acompress_method - метод определения полного сжатия в узле
+# check_acompress_tolerance - предел значения при котором узел считается узлом с абсолютным сжатием
+# compression_macro - флаг который регулирует запись макроса с узлами с абсолютным сжатием
+# dont_extract - этот флаг регулирует если у нас нет необходимости записывать извлекаемые данные на диск а нужно к примеру извлечь только compression_macro
 def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False, zeros=False, tail=False, listfile=False, regtime=False, check_acompress=False, check_acompress_method:CheckAbsoluteCompressMethod=CheckAbsoluteCompressMethod.ALL, check_acompress_tolerance=0.0, compression_macro=False, dont_extract=False):
 	global log
 	if verbose:
@@ -657,6 +671,7 @@ def extract_tensor_from_hcn(filelist, nodefile=None, outdir=None, verbose=False,
 		if regtime:
 			create_regtime_file('n.his', regtimelist)
 
+# Класс RTable значительно упрощает чтение отдельных таблиц(записей) в файле типа rst
 class RTable:
 	TYP = {
 	'i': 1,
@@ -720,6 +735,10 @@ class RTable:
 	def __repr__(self):
 		return self._name + ":{}".format(str(self))
 
+# Функция вставляющая необходимые значения, находящиеся в словаре damaged_dict rst
+# rstfilename - файл rst который будет использован в качестве прототипа (для того чтобы взять координаты номеров узлов и прочее)
+# new_rstfilename - вновь создаваемый файл
+# damaged_dict - словарь с особой структурой в которой содержаться значения для записи (фактически поврежденность)
 def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 	global TABLE_OF_ETYPES
 	
@@ -727,6 +746,8 @@ def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 	mat_node_table = {} #table of materials with nodes
 	
 	with open(rstfilename, 'rb', buffering=0) as f:
+		# Тут происходит последовательная считка заголовков
+		# согласно ANSYS Help help/ans_prog/Hlp_P_INT1_2.html (input that addr into the "Go to page" interactive form)
 		info_header = RTable(f)
 		rst_header = RTable(f)
 		dof_header = RTable(f)
@@ -903,14 +924,14 @@ def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 		
 
 						
-
+		# Итоговая последовательность данных которая должна быть записана в rst файл
 		result_sequence = (info_header, rst_header, dof_header, node_table, elm_table, gnod_table,
 						dsi_table, time_table, lsp_table, cyc_table, ntran_table,
 						geo_header, ety_header, *ety_tables, rl_header, *rl_tables,
 						csy_header, *csy_tables, *loc_tables, eid_table, *element_tables,
 						another_info, solution_header, solu_unused_info[0], esl_table)
-		
-		
+		if verbose:
+			print("Start the main write cycle...")
 		with open(new_rstfilename, 'wb', buffering=0) as f:
 
 						
@@ -928,7 +949,9 @@ def get_damage_rst(rstfilename, new_rstfilename, damaged_dict, verbose=False):
 					if num % (len(elemresults) // 1000) == 0:
 						print('Write results {}/{}\t\t'.format(num, len(elemresults)), end='\r')
 			print('Write results {a}/{a}\t\t\n'.format(a=len(elemresults)), end='\r')
-			
+
+
+# Entry point function		
 def main():
 	global log
 	args = parse_args()
@@ -941,6 +964,7 @@ def main():
 		log.info("=-----LOG START-----=")
 		if args.v and log:
 			log.info('additional information will be output in console.')
+	# Вызов различных подпрограмм
 	if args.extractor=='from-rst':
 		base = None
 		included_type = IncludedType.NON
@@ -961,7 +985,7 @@ def main():
 		if args.f:
 			base = 6
 		if args.a and log:
-			log.info('nodes on border between materials will be averaged by value')
+			log.info('border nodes between materials will be averaged by value')
 		extract_tensor_from_rst(args.rstfile, args.hcnfile, base, included, included_type, args.a, args.v, args.sm, args.em)
 	elif args.extractor=='from-hcn':
 		extract_tensor_from_hcn(args.hcnfiles, args.nodefile, args.outdir, args.v, args.z, args.t, args.i, args.r, args.c or args.macro_compress, args.ca_method, args.ca_tol, args.macro_compress, args.macro_compress)
@@ -975,7 +999,9 @@ def main():
 				else:
 					mdf[material_num] = [dam_file,]
 			for mat, dam_files in mdf.items():
-				mnd[int(mat)] = unite.main(['-icf', '-jrd', '-s', '--com', '2', *dam_files])
+				# Использование модуля unite для извлечения знчение из нескольких макросов
+				mnd[int(mat)] = unite.main(['-icf', '-jrd', '-s', '--com', '2', *dam_files]) 
+				# При этом берутся максимальные значения если номера узлов содержаться в нескольких файлах
 			get_damage_rst(args.rstfile, args.damfile, mnd, args.v)
 		else:
 			print(GLOBAL_UNITE_LACK_MESSAGE)
